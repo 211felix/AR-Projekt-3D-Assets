@@ -79,7 +79,7 @@ window.onerror = function(msg, src, line) {
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/loaders/GLTFLoader.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image-three.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
 <script>
 // ---------------------------------------------------------
 // AR-Verkabelungs-Room — MindAR-Version
@@ -107,6 +107,11 @@ function getKurvenConfig(a, b) {
 }
 
 // --- MindAR Setup ---
+if (!window.MINDAR || !window.MINDAR.IMAGE) {
+  document.body.innerHTML = '<div style="color:red;padding:20px;font-size:16px;background:#111;min-height:100vh;font-family:monospace">MindAR-Script konnte nicht geladen werden.<br><br>Mögliche Ursachen:<br>- Kein Internet beim Laden<br>- CDN nicht erreichbar<br>- Browser blockiert das Script<br><br>Bitte Seite neu laden.</div>';
+  throw new Error('MindAR nicht verfügbar');
+}
+
 const mindarThree = new window.MINDAR.IMAGE.MindARThree({
   container: document.body,
   imageTargetSrc: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/AR_Marker.mind',
