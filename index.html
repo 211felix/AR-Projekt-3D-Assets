@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AR-Verkabelungs-Room</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; overflow: hidden;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8eaed;
+  }
+
+  #hud {
+    position: fixed; top: 16px; left: 16px;
+    background: rgba(20, 24, 32, 0.85);
+    border: 1px solid #2a3140;
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 260px;
+    z-index: 999;
+  }
+  #hud h1 {
+    font-size: 14px; margin: 0 0 6px 0; color: #fff;
+    font-weight: 600;
+  }
+  #status { margin-top: 8px; font-weight: 600; }
+  #connections-list { margin-top: 8px; font-size: 12px; color: #9aa4b2; }
+
+  #reset-btn {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #c0392b; color: #fff; border: none;
+    padding: 10px 24px; border-radius: 4px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    z-index: 999;
+  }
+  #reset-btn:hover { background: #e74c3c; }
+
+  .success-banner {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #1e8449; color: #fff;
+    padding: 20px 40px; border-radius: 8px;
+    font-size: 20px; font-weight: 700;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    z-index: 999;
+  }
+
+  #marker-hint {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.6); color: #fff;
+    padding: 8px 16px; border-radius: 20px;
+    font-size: 13px; z-index: 999;
+    transition: opacity 0.5s;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <h1>AR-Verkabelungs-Room</h1>
+  <div>Tippe zwei Geräte nacheinander an, um sie zu verbinden.</div>
+  <div id="status">Status: 0 / 3 Verbindungen korrekt</div>
+  <div id="connections-list">Keine Verbindungen gesetzt.</div>
+</div>
+
+<button id="reset-btn">Reset</button>
+<div class="success-banner" id="success-banner">✅ Netzwerk wiederhergestellt!</div>
+<div id="marker-hint">📷 Kamera auf Marker richten...</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image-three.prod.js"></script>
+<script>
+// ---------------------------------------------------------
+// AR-Verkabelungs-Room — MindAR-Version
+// Marker: AR_Marker.mind aus GitHub-Repo
+// Geräte erscheinen auf dem Marker (Tischfläche)
+// ---------------------------------------------------------
+
+const SOLL_TOPOLOGIE = [
+  { a: 'PC',     b: 'Switch', curveMode: 'side', curveSide: 1  },
+  { a: 'Switch', b: 'Router', curveMode: 'side', curveSide: 1 },
+  { a: 'Router', b: 'Server', curveMode: 'down', curveSide: 1  },
+];
+
+function istKorrekteVerbindung(a, b) {
+  return SOLL_TOPOLOGIE.some(e =>
+    (e.a === a && e.b === b) || (e.a === b && e.b === a)
+  );
+}
+
+function getKurvenConfig(a, b) {
+  const eintrag = SOLL_TOPOLOGIE.find(e =>
+    (e.a === a && e.b === b) || (e.a === b && e.b === a)
+  );
+  return eintrag || { curveMode: 'side', curveSide: 1 };
+}
+
+// --- MindAR Setup ---
+const mindarThree = new window.MINDAR.IMAGE.MindARThree({
+  container: document.body,
+  imageTargetSrc: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/AR_Marker.mind',
+  maxTrack: 1,
+  uiLoading: 'yes',
+  uiScanning: 'yes',
+  uiError: 'yes',
+});
+
+const { renderer, scene, camera } = mindarThree;
+
+// Licht
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(0, 5, 3);
+scene.add(dirLight);
+
+// Anchor: alles was auf dem Marker erscheint kommt hier rein
+const anchor = mindarThree.addAnchor(0);
+const anchorGroup = anchor.group;
+
+// Marker-Status: Hint ausblenden wenn Marker gefunden
+anchor.onTargetFound = () => {
+  document.getElementById('marker-hint').style.opacity = '0';
+};
+anchor.onTargetLost = () => {
+  document.getElementById('marker-hint').style.opacity = '1';
+};
+
+// --- Geräte-Setup ---
+const HITBOX_SIZE = [0.18, 0.21, 0.18];
+
+const deviceDefs = [
+  {
+    name: 'PC', pos: [-0.45, 0.07, 0.2], color: 0x3498db,
+    placeholderGeo: new THREE.BoxGeometry(1, 1, 1),
+    modelUrl: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/laptop.glb',
+    scale: 0.0075, xOffset: 0, yOffset: -0.063, zOffset: 0, rotationX: 0, rotationY: 55, rotationZ: 0,
+    plugOffsetX: 0, plugOffsetY: -0.087, plugOffsetZ: -0.1
+  },
+  {
+    name: 'Switch', pos: [0.35, 0.06, -0.25], color: 0xf39c12,
+    placeholderGeo: new THREE.CylinderGeometry(0.6, 0.6, 0.8, 16),
+    modelUrl: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/switch.glb',
+    scale: 0.225, xOffset: 0.66, yOffset: -0.054, zOffset: 0.23, rotationX: 0, rotationY: -20, rotationZ: 0,
+    plugOffsetX: 0, plugOffsetY: -0.06, plugOffsetZ: 0
+  },
+  {
+    name: 'Router', pos: [0.35, 0.0, 0.15], color: 0x9b59b6,
+    placeholderGeo: new THREE.CylinderGeometry(0.6, 0.6, 0.8, 6),
+    modelUrl: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/router.glb',
+    scale: 0.115, xOffset: 0, yOffset: -0.2, zOffset: 0, rotationX: 0, rotationY: -120, rotationZ: 0,
+    plugOffsetX: 0, plugOffsetY: 0, plugOffsetZ: 0
+  },
+  {
+    name: 'Server', pos: [-0.3, 0.09, -0.25], color: 0x2ecc71,
+    placeholderGeo: new THREE.BoxGeometry(1, 1.4, 1),
+    modelUrl: 'https://raw.githubusercontent.com/211felix/AR-Projekt-3D-Assets/main/server_rack.glb',
+    scale: 0.225, xOffset: 0, yOffset: 0.135, zOffset: 0, rotationX: 0, rotationY: 200, rotationZ: 0,
+    plugOffsetX: 0, plugOffsetY: 0.1, plugOffsetZ: 0
+  },
+];
+
+const devices = {};
+const gltfLoader = new THREE.GLTFLoader();
+
+deviceDefs.forEach(def => {
+  const hitboxGeo = new THREE.BoxGeometry(...HITBOX_SIZE);
+  const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+  const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+  hitbox.position.set(...def.pos);
+  hitbox.userData.deviceName = def.name;
+  hitbox.userData.baseColor = def.color;
+  anchorGroup.add(hitbox); // <- an Anchor statt scene
+
+  devices[def.name] = { hitbox, visual: null, basePos: new THREE.Vector3(...def.pos) };
+
+  if (def.modelUrl) {
+    ladeModell(def.name, def.modelUrl, def.scale, def.xOffset, def.yOffset, def.zOffset, def.rotationX, def.rotationY, def.rotationZ);
+  } else {
+    setzePlatzhalter(def.name, def.placeholderGeo, def.color);
+  }
+
+  const label = makeTextSprite(def.name);
+  label.position.set(0, 0.18, 0);
+  hitbox.add(label);
+});
+
+function setzePlatzhalter(name, geo, color) {
+  const device = devices[name];
+  const mat = new THREE.MeshStandardMaterial({ color });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData.isPlaceholder = true;
+  device.hitbox.add(mesh);
+  device.visual = mesh;
+}
+
+function ladeModell(name, url, scale = 1, xOffset = 0, yOffset = 0, zOffset = 0, rotationX = 0, rotationY = 0, rotationZ = 0) {
+  const device = devices[name];
+  gltfLoader.load(
+    url,
+    function (gltf) {
+      if (device.visual) device.hitbox.remove(device.visual);
+      const model = gltf.scene;
+      model.scale.setScalar(scale);
+      model.position.set(xOffset, yOffset, zOffset);
+      model.rotation.set(
+        rotationX * Math.PI / 180,
+        rotationY * Math.PI / 180,
+        rotationZ * Math.PI / 180
+      );
+      device.hitbox.add(model);
+      device.visual = model;
+    },
+    undefined,
+    function (error) {
+      console.error(`Fehler beim Laden von Modell "${name}":`, error);
+    }
+  );
+}
+
+function makeTextSprite(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 128, 42);
+  const texture = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.24, 0.06, 1);
+  return sprite;
+}
+
+// --- Auswahl- und Verbindungslogik ---
+let selectedDevice = null;
+const connections = [];
+
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+// Touch-Event für Mobile
+renderer.domElement.addEventListener('touchstart', onTouch, { passive: false });
+renderer.domElement.addEventListener('click', onSceneClick);
+
+function onTouch(event) {
+  event.preventDefault();
+  const touch = event.touches[0];
+  onSceneClick({ clientX: touch.clientX, clientY: touch.clientY });
+}
+
+function onSceneClick(event) {
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  const hitboxes = Object.values(devices).map(d => d.hitbox);
+  const hits = raycaster.intersectObjects(hitboxes);
+  if (hits.length === 0) return;
+
+  const clicked = hits[0].object;
+  const name = clicked.userData.deviceName;
+  handleDeviceClick(name);
+}
+
+function handleDeviceClick(name) {
+  if (!selectedDevice) {
+    selectedDevice = name;
+    setAuswahlMarkierung(name, true);
+    return;
+  }
+  if (selectedDevice === name) {
+    setAuswahlMarkierung(name, false);
+    selectedDevice = null;
+    return;
+  }
+  const a = selectedDevice;
+  const b = name;
+  setAuswahlMarkierung(a, false);
+  selectedDevice = null;
+
+  const existsAlready = connections.some(c =>
+    (c.a === a && c.b === b) || (c.a === b && c.b === a)
+  );
+  if (existsAlready) return;
+  erstelleVerbindung(a, b);
+}
+
+function setAuswahlMarkierung(name, aktiv) {
+  const device = devices[name];
+  if (aktiv) {
+    if (!device.selectionRing) {
+      const ringGeo = new THREE.RingGeometry(0.1, 0.13, 32);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xf1c40f, side: THREE.DoubleSide, transparent: true, opacity: 0.9
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = -device.hitbox.position.y + 0.02;
+      device.hitbox.add(ring);
+      device.selectionRing = ring;
+    }
+    device.selectionRing.visible = true;
+  } else if (device.selectionRing) {
+    device.selectionRing.visible = false;
+  }
+}
+
+function erstelleVerbindung(a, b) {
+  const korrekt = istKorrekteVerbindung(a, b);
+  const farbe = korrekt ? 0x2ecc71 : 0xe74c3c;
+
+  const defA = deviceDefs.find(d => d.name === a);
+  const defB = deviceDefs.find(d => d.name === b);
+
+  const posA = devices[a].hitbox.position.clone();
+  posA.x += defA.plugOffsetX;
+  posA.y += defA.plugOffsetY + 0.02;
+  posA.z += defA.plugOffsetZ;
+
+  const posB = devices[b].hitbox.position.clone();
+  posB.x += defB.plugOffsetX;
+  posB.y += defB.plugOffsetY + 0.02;
+  posB.z += defB.plugOffsetZ;
+
+  const mitte = posA.clone().lerp(posB, 0.5);
+  const abstand = posA.distanceTo(posB);
+  const { curveMode, curveSide } = getKurvenConfig(a, b);
+
+  if (curveMode === 'down') {
+    mitte.y -= abstand * 0.18;
+  } else {
+    const richtung = posB.clone().sub(posA).normalize();
+    const senkrecht = new THREE.Vector3(-richtung.z, 0, richtung.x);
+    mitte.addScaledVector(senkrecht, abstand * 0.25 * curveSide);
+    mitte.y = (posA.y + posB.y) / 2;
+  }
+
+  const kurve = new THREE.QuadraticBezierCurve3(posA, mitte, posB);
+  const tubeGeo = new THREE.TubeGeometry(kurve, 20, 0.004, 8, false);
+  const tubeMat = new THREE.MeshStandardMaterial({ color: farbe, roughness: 0.6, metalness: 0.1 });
+  const line = new THREE.Mesh(tubeGeo, tubeMat);
+  anchorGroup.add(line); // <- an Anchor statt scene
+
+  connections.push({ a, b, korrekt, line });
+  updateHUD();
+  pruefeVollstaendigkeit();
+}
+
+function pruefeVollstaendigkeit() {
+  const korrekteVerbindungen = connections.filter(c => c.korrekt).length;
+  if (korrekteVerbindungen === SOLL_TOPOLOGIE.length && connections.every(c => c.korrekt)) {
+    document.getElementById('success-banner').style.display = 'block';
+  }
+}
+
+function updateHUD() {
+  const korrekteVerbindungen = connections.filter(c => c.korrekt).length;
+  document.getElementById('status').textContent =
+    `Status: ${korrekteVerbindungen} / ${SOLL_TOPOLOGIE.length} Verbindungen korrekt`;
+  const list = document.getElementById('connections-list');
+  if (connections.length === 0) {
+    list.textContent = 'Keine Verbindungen gesetzt.';
+  } else {
+    list.innerHTML = connections.map(c =>
+      `${c.korrekt ? '✓' : '✗'} ${c.a} – ${c.b}`
+    ).join('<br>');
+  }
+}
+
+document.getElementById('reset-btn').addEventListener('click', resetScene);
+
+function resetScene() {
+  connections.forEach(c => anchorGroup.remove(c.line));
+  connections.length = 0;
+  if (selectedDevice) setAuswahlMarkierung(selectedDevice, false);
+  selectedDevice = null;
+  document.getElementById('success-banner').style.display = 'none';
+  updateHUD();
+}
+
+// --- MindAR starten ---
+const start = async () => {
+  await mindarThree.start();
+  renderer.setAnimationLoop(() => {
+    renderer.render(scene, camera);
+  });
+};
+start();
+
+</script>
+</body>
+</html>
